@@ -1,12 +1,11 @@
 package com.example.applocker
 
-import android.app.AppOpsManager
-import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.TextUtils
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
@@ -17,6 +16,7 @@ import androidx.appcompat.app.AppCompatActivity
 class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: LockPreferences
+    private lateinit var btnStatus: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,17 +27,29 @@ class MainActivity : AppCompatActivity() {
             setPadding(32, 32, 32, 32)
         }
 
-        val btnPermissions = Button(this).apply {
-            text = "Grant Permissions & Start Lock Service"
+        btnStatus = Button(this).apply {
             setOnClickListener { checkAndRequestPermissions() }
         }
 
         val listView = ListView(this)
-        rootLayout.addView(btnPermissions)
+        rootLayout.addView(btnStatus)
         rootLayout.addView(listView)
         setContentView(rootLayout)
 
         loadInstalledApps(listView)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateButtonLabel()
+    }
+
+    private fun updateButtonLabel() {
+        btnStatus.text = when {
+            !Settings.canDrawOverlays(this) -> "Step 1: Allow 'Display Over Other Apps'"
+            !isAccessibilityServiceEnabled() -> "Step 2: Enable 'AppLocker' in Accessibility"
+            else -> "Protection Active (No Notification Mode)"
+        }
     }
 
     private fun loadInstalledApps(listView: ListView) {
@@ -72,14 +84,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkAndRequestPermissions() {
-        if (!hasUsageStatsPermission()) {
-            Toast.makeText(this, "Enable Usage Access for AppLocker", Toast.LENGTH_LONG).show()
-            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-            return
-        }
-
         if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Enable 'Display over other apps'", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Turn ON 'Display over other apps' for AppLocker", Toast.LENGTH_LONG).show()
             val intent = Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:$packageName")
@@ -88,31 +94,29 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val serviceIntent = Intent(this, AppLockService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
+        if (!isAccessibilityServiceEnabled()) {
+            Toast.makeText(this, "Find 'AppLocker' under Downloaded/Installed Services and turn it ON", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
         }
-        Toast.makeText(this, "AppLock Service Started!", Toast.LENGTH_SHORT).show()
+
+        Toast.makeText(this, "Stealth AppLock is already running!", Toast.LENGTH_SHORT).show()
     }
 
-    private fun hasUsageStatsPermission(): Boolean {
-        val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            appOps.unsafeCheckOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                android.os.Process.myUid(),
-                packageName
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            appOps.checkOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                android.os.Process.myUid(),
-                packageName
-            )
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expectedComponent = ComponentName(this, AppLockService::class.java).flattenToString()
+        val enabledServices = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+
+        val splitter = TextUtils.SimpleStringSplitter(':')
+        splitter.setString(enabledServices)
+        while (splitter.hasNext()) {
+            if (splitter.next().equals(expectedComponent, ignoreCase = true)) {
+                return true
+            }
         }
-        return mode == AppOpsManager.MODE_ALLOWED
+        return false
     }
 }
