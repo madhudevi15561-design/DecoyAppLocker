@@ -2,10 +2,11 @@ package com.example.applocker
 
 import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
-import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -21,10 +22,10 @@ class AppLockService : AccessibilityService() {
     private lateinit var prefs: LockPreferences
     private var overlayView: View? = null
 
+    private val handler = Handler(Looper.getMainLooper())
     private var lastUnlockedPackage: String? = null
     private var currentForegroundPackage: String? = null
 
-    // System UI & keyboard packages to ignore so typing or pulling down shade doesn't reset unlock
     private val ignoredPackages = setOf(
         "com.android.systemui",
         "com.google.android.inputmethod.latin",
@@ -44,7 +45,6 @@ class AppLockService : AccessibilityService() {
 
         if (ignoredPackages.contains(pkg)) return
 
-        // Reset temporary unlock state when switching to a different app or Home screen
         if (pkg != currentForegroundPackage) {
             if (currentForegroundPackage == lastUnlockedPackage) {
                 lastUnlockedPackage = null
@@ -53,7 +53,6 @@ class AppLockService : AccessibilityService() {
         }
 
         val lockedApps = prefs.getLockedPackages()
-        // Lock checked apps AND lock AppLocker itself so nobody can uncheck your apps
         val shouldLock = lockedApps.contains(pkg) || pkg == packageName
 
         if (shouldLock && pkg != lastUnlockedPackage) {
@@ -79,21 +78,24 @@ class AppLockService : AccessibilityService() {
             else
                 @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS,
+            PixelFormat.OPAQUE
         ).apply {
             gravity = Gravity.CENTER
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
         }
 
         overlayView = LayoutInflater.from(this).inflate(R.layout.overlay_lock_screen, null)
 
-        val titleText = overlayView!!.findViewById<TextView>(R.id.tvLockedApp)
         val subtitleText = overlayView!!.findViewById<TextView>(R.id.tvSubtitle)
         val secretEnterText = overlayView!!.findViewById<TextView>(R.id.tvSecretEnter)
         val patternView = overlayView!!.findViewById<PatternLockView>(R.id.patternView)
         val exitBtn = overlayView!!.findViewById<Button>(R.id.btnGoHome)
-
-        titleText.text = if (targetPackage == packageName) "AppLocker Settings" else targetPackage
 
         // Decoy Pattern: Rejects every pattern drawn
         patternView.onPatternCompleted = { dots ->
@@ -106,37 +108,29 @@ class AppLockService : AccessibilityService() {
             patternView.triggerErrorAndReset()
         }
 
-        // Secret Unlock: Swipe the word "Enter" to the left
-        var startX = 0f
-        secretEnterText.setOnTouchListener { view, event ->
+        // Secret Unlock: Press and hold the fixed word "Enter" for 1.5 seconds (1500ms)
+        val unlockRunnable = Runnable {
+            lastUnlockedPackage = targetPackage
+            removeLockOverlay()
+        }
+
+        secretEnterText.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    startX = event.rawX
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val deltaX = event.rawX - startX
-                    if (deltaX < 0) {
-                        view.translationX = deltaX.coerceAtLeast(-120f)
-                    }
+                    handler.postDelayed(unlockRunnable, 1500L)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    val deltaX = event.rawX - startX
-                    if (deltaX <= -60f) {
-                        lastUnlockedPackage = targetPackage
-                        removeLockOverlay()
-                    } else {
-                        view.animate().translationX(0f).setDuration(150).start()
-                    }
+                    // Cancel unlock if finger is lifted before 1.5 seconds
+                    handler.removeCallbacks(unlockRunnable)
                     true
                 }
                 else -> false
             }
         }
 
-        // Send user to Home screen if they tap Cancel
         exitBtn.setOnClickListener {
+            handler.removeCallbacks(unlockRunnable)
             performGlobalAction(GLOBAL_ACTION_HOME)
             removeLockOverlay()
         }
