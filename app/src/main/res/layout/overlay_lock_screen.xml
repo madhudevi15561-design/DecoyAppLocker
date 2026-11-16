@@ -2,20 +2,12 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FA101014"
+    android:background="#FF101014"
     android:gravity="center"
     android:orientation="vertical"
     android:padding="28dp">
 
-    <TextView
-        android:id="@+id/tvLockedApp"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="12dp"
-        android:text="App Locked"
-        android:textColor="#888888"
-        android:textSize="14sp" />
-
+    <!-- Visually reads "Enter password", with "Enter" isolated for the 1.5s long-press -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -27,8 +19,8 @@
             android:id="@+id/tvSecretEnter"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:paddingBottom="12dp"
+            android:paddingTop="14dp"
+            android:paddingBottom="14dp"
             android:text="Enter"
             android:textColor="#FFFFFF"
             android:textSize="26sp"
@@ -37,8 +29,8 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:paddingBottom="12dp"
+            android:paddingTop="14dp"
+            android:paddingBottom="14dp"
             android:text=" password"
             android:textColor="#FFFFFF"
             android:textSize="26sp"
