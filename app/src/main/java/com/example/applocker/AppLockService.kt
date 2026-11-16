@@ -1,110 +1,72 @@
 package com.example.applocker
 
+import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
-import android.app.usage.UsageEvents
-import android.app.usage.UsageStatsManager
-import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
-import android.os.Handler
-import android.os.IBinder
-import android.os.Looper
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
 import android.widget.Button
 import android.widget.TextView
-import androidx.core.app.NotificationCompat
 
-class AppLockService : Service() {
+class AppLockService : AccessibilityService() {
 
     private lateinit var windowManager: WindowManager
     private lateinit var prefs: LockPreferences
     private var overlayView: View? = null
 
-    private val handler = Handler(Looper.getMainLooper())
     private var lastUnlockedPackage: String? = null
     private var currentForegroundPackage: String? = null
 
-    private val checkRunnable = object : Runnable {
-        override fun run() {
-            checkForegroundApp()
-            handler.postDelayed(this, 350)
-        }
-    }
+    // System UI & keyboard packages to ignore so typing or pulling down shade doesn't reset unlock
+    private val ignoredPackages = setOf(
+        "com.android.systemui",
+        "com.google.android.inputmethod.latin",
+        "com.samsung.android.honeyboard",
+        "com.touchtype.swiftkey"
+    )
 
-    override fun onCreate() {
-        super.onCreate()
+    override fun onServiceConnected() {
+        super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         prefs = LockPreferences(this)
-        startForegroundNotification()
-        handler.post(checkRunnable)
     }
 
-    private fun startForegroundNotification() {
-        val channelId = "app_lock_channel"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "App Lock Protection",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val pkg = event.packageName?.toString() ?: return
 
-        val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("App Lock Active")
-            .setContentText("Monitoring protected apps")
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .build()
+        if (ignoredPackages.contains(pkg)) return
 
-        startForeground(101, notification)
-    }
-
-    private fun checkForegroundApp() {
-        val foregroundApp = getForegroundPackageName() ?: return
-
-        if (foregroundApp != currentForegroundPackage) {
-            if (currentForegroundPackage == lastUnlockedPackage && foregroundApp != packageName) {
+        // Reset temporary unlock state when switching to a different app or Home screen
+        if (pkg != currentForegroundPackage) {
+            if (currentForegroundPackage == lastUnlockedPackage) {
                 lastUnlockedPackage = null
             }
-            currentForegroundPackage = foregroundApp
+            currentForegroundPackage = pkg
         }
 
         val lockedApps = prefs.getLockedPackages()
+        // Lock checked apps AND lock AppLocker itself so nobody can uncheck your apps
+        val shouldLock = lockedApps.contains(pkg) || pkg == packageName
 
-        if (lockedApps.contains(foregroundApp) && foregroundApp != lastUnlockedPackage) {
+        if (shouldLock && pkg != lastUnlockedPackage) {
             if (overlayView == null) {
-                showLockOverlay(foregroundApp)
+                showLockOverlay(pkg)
             }
-        } else if (!lockedApps.contains(foregroundApp) && overlayView != null) {
+        } else if (!shouldLock && overlayView != null) {
             removeLockOverlay()
         }
     }
 
-    private fun getForegroundPackageName(): String? {
-        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val endTime = System.currentTimeMillis()
-        val beginTime = endTime - 5000
-
-        val usageEvents = usm.queryEvents(beginTime, endTime)
-        val event = UsageEvents.Event()
-        var recentPackage: String? = null
-
-        while (usageEvents.hasNextEvent()) {
-            usageEvents.getNextEvent(event)
-            if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
-                recentPackage = event.packageName
-            }
-        }
-        return recentPackage
+    override fun onInterrupt() {
+        removeLockOverlay()
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -131,8 +93,9 @@ class AppLockService : Service() {
         val patternView = overlayView!!.findViewById<PatternLockView>(R.id.patternView)
         val exitBtn = overlayView!!.findViewById<Button>(R.id.btnGoHome)
 
-        titleText.text = targetPackage
+        titleText.text = if (targetPackage == packageName) "AppLocker Settings" else targetPackage
 
+        // Decoy Pattern: Rejects every pattern drawn
         patternView.onPatternCompleted = { dots ->
             if (dots.size < 4) {
                 subtitleText.text = "Connect at least 4 dots"
@@ -143,6 +106,7 @@ class AppLockService : Service() {
             patternView.triggerErrorAndReset()
         }
 
+        // Secret Unlock: Swipe the word "Enter" to the left
         var startX = 0f
         secretEnterText.setOnTouchListener { view, event ->
             when (event.action) {
@@ -171,12 +135,9 @@ class AppLockService : Service() {
             }
         }
 
+        // Send user to Home screen if they tap Cancel
         exitBtn.setOnClickListener {
-            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_HOME)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            startActivity(homeIntent)
+            performGlobalAction(GLOBAL_ACTION_HOME)
             removeLockOverlay()
         }
 
@@ -191,10 +152,7 @@ class AppLockService : Service() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(checkRunnable)
         removeLockOverlay()
         super.onDestroy()
     }
-
-    override fun onBind(intent: Intent?): IBinder? = null
 }
