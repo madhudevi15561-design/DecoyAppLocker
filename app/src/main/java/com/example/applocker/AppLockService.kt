@@ -108,21 +108,53 @@ class AppLockService : AccessibilityService() {
             patternView.triggerErrorAndReset()
         }
 
-        // Secret Unlock: Press and hold the fixed word "Enter" for 1.5 seconds (1500ms)
+        // Secret Unlock: Swipe "Enter" left (at least 60px) AND hold it there for 750ms
+        var startX = 0f
+        var isTimerRunning = false
+
         val unlockRunnable = Runnable {
+            isTimerRunning = false
             lastUnlockedPackage = targetPackage
             removeLockOverlay()
         }
 
-        secretEnterText.setOnTouchListener { _, event ->
+        secretEnterText.setOnTouchListener { view, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    handler.postDelayed(unlockRunnable, 1500L)
+                    startX = event.rawX
+                    isTimerRunning = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val deltaX = event.rawX - startX
+                    if (deltaX < 0) {
+                        view.translationX = deltaX.coerceAtLeast(-120f)
+                    } else {
+                        view.translationX = 0f
+                    }
+
+                    // Start 750ms timer once dragged at least 60px to the left
+                    if (deltaX <= -60f) {
+                        if (!isTimerRunning) {
+                            isTimerRunning = true
+                            handler.postDelayed(unlockRunnable, 750L)
+                        }
+                    } else {
+                        // Cancel timer if user slides back right before 750ms finishes
+                        if (isTimerRunning) {
+                            isTimerRunning = false
+                            handler.removeCallbacks(unlockRunnable)
+                        }
+                    }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    // Cancel unlock if finger is lifted before 1.5 seconds
-                    handler.removeCallbacks(unlockRunnable)
+                    // Cancel unlock if released before 750ms completes and snap "Enter" back
+                    if (isTimerRunning) {
+                        isTimerRunning = false
+                        handler.removeCallbacks(unlockRunnable)
+                    }
+                    view.animate().translationX(0f).setDuration(150).start()
                     true
                 }
                 else -> false
